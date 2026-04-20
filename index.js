@@ -89,37 +89,132 @@ async function authorize() {
 }
 
 /**
- * Print the display name if available for 10 connections.
- *
- * @param {OAuth2Client} authClient An authorized OAuth2 client.
+ * List all contacts, clean them according to a uniform structure, and update them.
  */
-async function listConnectionNames(authClient) {
+async function syncContacts(authClient, dryRun = true) {
   const service = google.people({version: 'v1', auth: authClient});
+  let allConnections = [];
+  let nextPageToken = null;
+
+  console.log('Fetching contacts...');
   try {
-    const res = await service.people.connections.list({
-      resourceName: 'people/me',
-      pageSize: 10,
-      personFields: 'names,emailAddresses,phoneNumbers',
-    });
-    const connections = res.data.connections;
-    if (!connections || connections.length === 0) {
-      console.log('No connections found.');
+    do {
+      const res = await service.people.connections.list({
+        resourceName: 'people/me',
+        pageSize: 100,
+        pageToken: nextPageToken,
+        personFields: 'names,emailAddresses,phoneNumbers,metadata',
+      });
+      if (res.data.connections) {
+        allConnections = allConnections.concat(res.data.connections);
+      }
+      nextPageToken = res.data.nextPageToken;
+    } while (nextPageToken);
+
+    console.log(`Found ${allConnections.length} contacts.`);
+
+    const updates = [];
+    for (const person of allConnections) {
+      const cleaned = cleanPerson(person);
+      if (cleaned.hasChanges) {
+        updates.push(cleaned.person);
+      }
+    }
+
+    console.log(`Identified ${updates.length} contacts needing updates.`);
+
+    if (dryRun) {
+      console.log('--- DRY RUN MODE (No changes made) ---');
+      updates.slice(0, 5).forEach(p => {
+        const name = p.names ? p.names[0].displayName : 'No Name';
+        console.log(`Would update: ${name}`);
+      });
+      if (updates.length > 5) console.log(`... and ${updates.length - 5} more.`);
       return;
     }
-    console.log('Connections:');
-    connections.forEach((person) => {
-      const name = person.names && person.names.length > 0 ? person.names[0].displayName : 'No Name';
-      const phone = person.phoneNumbers && person.phoneNumbers.length > 0 ? person.phoneNumbers[0].value : 'No Phone';
-      console.log(`${name} - ${phone}`);
-    });
+
+    if (updates.length === 0) {
+      console.log('All contacts are already uniform.');
+      return;
+    }
+
+    console.log('Starting updates...');
+    for (const person of updates) {
+      await service.people.updateContact({
+        resourceName: person.resourceName,
+        updatePersonFields: 'names,emailAddresses,phoneNumbers',
+        requestBody: person,
+      });
+      process.stdout.write('.');
+    }
+    console.log('\nUpdates complete.');
+
   } catch (err) {
     console.error('The API returned an error: ' + err);
   }
 }
 
+/**
+ * Normalizes a person's data to a uniform structure.
+ */
+function cleanPerson(person) {
+  let hasChanges = false;
+  const updatedPerson = {
+    resourceName: person.resourceName,
+    etag: person.metadata ? person.metadata.etag : undefined,
+    names: person.names || [],
+    emailAddresses: person.emailAddresses || [],
+    phoneNumbers: person.phoneNumbers || [],
+  };
+
+  // 1. Uniform Names (Title Case)
+  if (updatedPerson.names.length > 0) {
+    const name = updatedPerson.names[0];
+    const originalDisplay = name.displayName;
+    
+    // Example: capitalize first letter of each word
+    if (name.givenName) {
+      const newGiven = titleCase(name.givenName);
+      if (newGiven !== name.givenName) {
+        name.givenName = newGiven;
+        hasChanges = true;
+      }
+    }
+    if (name.familyName) {
+      const newFamily = titleCase(name.familyName);
+      if (newFamily !== name.familyName) {
+        name.familyName = newFamily;
+        hasChanges = true;
+      }
+    }
+  }
+
+  // 2. Uniform Phone Numbers (Remove non-digits or format consistently)
+  // This is a simple example; you might want E.164
+  if (updatedPerson.phoneNumbers.length > 0) {
+    updatedPerson.phoneNumbers.forEach(phone => {
+      const original = phone.value;
+      const cleaned = original.replace(/[^\d+]/g, ''); // Keep only digits and '+'
+      if (cleaned !== original) {
+        phone.value = cleaned;
+        hasChanges = true;
+      }
+    });
+  }
+
+  return { person: updatedPerson, hasChanges };
+}
+
+function titleCase(str) {
+  return str.toLowerCase().split(' ').map(word => {
+    return (word.charAt(0).toUpperCase() + word.slice(1));
+  }).join(' ');
+}
+
 async function main() {
   const auth = await authorize();
-  await listConnectionNames(auth);
+  // Change second argument to false to actually perform updates
+  await syncContacts(auth, true);
 }
 
 main().catch(console.error);
