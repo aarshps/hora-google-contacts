@@ -9,6 +9,54 @@ const SCOPES = ['https://www.googleapis.com/auth/contacts'];
 const TOKEN_PATH = path.join(process.cwd(), 'token.json');
 const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
 
+const CONTEXT_TAGS = new Set([
+  'vast', 'gmg', 'cse', 'bbb', 'optum', 'cdm', 'inc', 'kkm', 'hr', 'qa', 'manager', 'support', 'tdp', 'builders', 'ich', 'zoho', 'hdfc', 'ce', 'carestack', 'jio', 'honda', 'truemeds', 'pe', 'noc', 'brocode', 'app', 'bank', 'med', 'hospital', 'clinic', 'pharma', 'muthoot', 'lic', 'byjus', 'accenture', 'cogni', 'cognizant', 'infosys', 'tcs', 'wipro', 'ibm', 'amazon', 'flipkart', 'myntra', 'swiggy', 'zomato', 'uber', 'ola', 'revv', 'pepperfry', 'furlenco', 'srm', 'tcr', 'tvm', 'chennai', 'che', 'velachery', 'pudussery', 'thailand', 'choondal', 'viviana', 'kilpok', 'pkd', 'cok', 'kannur', 'calicut', 'trivandrum', 'bangalore', 'mumbai', 'delhi', 'hyd', 'hyderabad', 'pune', 'kochi', 'ernakulam', 'thrissur', 'palakkad', 'kollam', 'alappuzha', 'kottayam', 'wayanad', 'kasaragod', 'idukki', 'malappuram', 'pathanamthitta', 'uae', 'dubai', 'uk', 'us', 'usa', 'aus', 'australia', 'canada', 'singapore', 'malaysia', 'philippines', 'philippenes', 'chinese', 'pak', 'pakistan', 'gvr', 'guruvayoor', 'city', 'girl', 'friend', 'tinder', 'batch', 'chechi', 'doctor', 'bumble', 'chettan', 'sir', 'guy', 'driver', 'owner', 'onwer', 'uncle', 'aunty', 'brother', 'sister', 'mom', 'dad', 'mother', 'father', 'wife', 'husband', 'son', 'daughter', 'cousin', 'nephew', 'niece', 'grandpa', 'grandma', 'roommate', 'flatmate', 'neighbor', 'colleague', 'boss', 'tl', 'lead', 'senior', 'junior', 'jr', 'sr', 'service', 'pokemon', 'pokmon', 'go', 'football', 'delivery', 'villa', 'shop', 'bike', 'car', 'auto', 'cab', 'repair', 'electrician', 'plumber', 'mechanic', 'carpenter', 'painter', 'caterer', 'catering', 'event', 'wedding', 'planner', 'cake', 'bakery', 'restaurant', 'cafe', 'food', 'grocery', 'supermarket', 'mart', 'store', 'mall', 'boutique', 'tailor', 'textile', 'jewellery', 'watch', 'mobile', 'laptop', 'pc', 'real', 'estate', 'broker', 'builder', 'contractor', 'architect', 'interior', 'designer', 'engineer', 'lawyer', 'advocate', 'legal', 'police', 'courier', 'transport', 'logistics', 'travel', 'tour', 'ticket', 'visa', 'immigration', 'abroad', 'study', 'education', 'college', 'school', 'tuition', 'class', 'institute', 'academy', 'university', 'hostel', 'pg', 'room', 'rent', 'lease', 'sale', 'buy', 'sell', 'customer', 'care', 'helpline', 'tech', 'software', 'hardware', 'it', 'bpo', 'kpo', 'sales', 'marketing', 'exec', 'executive', 'mgr', 'vp', 'ceo', 'coo', 'cfo', 'cto', 'cmo', 'chro', 'dr', 'prof', 'mr', 'mrs', 'ms', 'miss', 'lady', 'boy', 'man', 'woman', 'kid', 'child', 'baby', 'impl', 'boys', 'science', 'maths', 'physics', 'chemistry', 'biology', 'arts', 'commerce', 'accountant', 'accounts', 'singer', 'photostat'
+]);
+
+function extractNameAndNotes(displayName) {
+  const words = displayName.split(/\s+/);
+  let nameWords = [];
+  let noteWords = [];
+  let foundContext = false;
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const cleanWord = word.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+    
+    const isTag = CONTEXT_TAGS.has(cleanWord) || /\d/.test(word) || (cleanWord === 'th');
+    
+    if (foundContext) {
+      noteWords.push(word);
+    } else if (isTag && i > 0) { 
+      foundContext = true;
+      noteWords.push(word);
+    } else {
+      nameWords.push(word);
+    }
+  }
+  
+  if (nameWords.length === 0) {
+    nameWords = words;
+    noteWords = [];
+  }
+  
+  let givenName = '';
+  let familyName = '';
+  
+  if (nameWords.length === 1) {
+    givenName = nameWords[0];
+  } else if (nameWords.length > 1) {
+    givenName = nameWords[0];
+    familyName = nameWords.slice(1).join(' ');
+  }
+  
+  return {
+    givenName: titleCase(givenName),
+    familyName: titleCase(familyName),
+    note: noteWords.join(' ')
+  };
+}
+
 /**
  * Reads previously authorized credentials from the save file.
  *
@@ -227,24 +275,38 @@ function cleanPerson(person) {
     }
   }
 
-  // 1. Uniform Names (Title Case)
+  // 1. Uniform Names (Title Case & Extract Context to Notes)
   if (updatedPerson.names.length > 0) {
     const name = updatedPerson.names[0];
-    const originalDisplay = name.displayName;
+    const currentNameText = `${name.givenName || ''} ${name.familyName || ''}`.trim();
     
-    // Example: capitalize first letter of each word
-    if (name.givenName) {
-      const newGiven = titleCase(name.givenName);
-      if (newGiven !== name.givenName) {
-        name.givenName = newGiven;
+    if (currentNameText) {
+      const extracted = extractNameAndNotes(currentNameText);
+      
+      if (name.givenName !== extracted.givenName || name.familyName !== extracted.familyName) {
+        name.givenName = extracted.givenName;
+        name.familyName = extracted.familyName;
         hasChanges = true;
       }
-    }
-    if (name.familyName) {
-      const newFamily = titleCase(name.familyName);
-      if (newFamily !== name.familyName) {
-        name.familyName = newFamily;
-        hasChanges = true;
+      
+      if (extracted.note) {
+        const noteText = extracted.note;
+        let bioUpdated = false;
+        
+        if (updatedPerson.biographies.length > 0) {
+          const bio = updatedPerson.biographies[0];
+          if (!bio.value.includes(noteText)) {
+             bio.value = bio.value ? `${bio.value}\n${noteText}` : noteText;
+             bioUpdated = true;
+          }
+        } else {
+          updatedPerson.biographies.push({ value: noteText });
+          bioUpdated = true;
+        }
+        
+        if (bioUpdated) {
+          hasChanges = true;
+        }
       }
     }
   }
