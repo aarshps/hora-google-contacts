@@ -138,6 +138,10 @@ async function authorize() {
 /**
  * List all contacts, clean them according to a uniform structure, and update them.
  */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function syncContacts(authClient, dryRun = true) {
   const service = google.people({version: 'v1', auth: authClient});
   let allConnections = [];
@@ -189,13 +193,34 @@ async function syncContacts(authClient, dryRun = true) {
     }
 
     console.log('Starting updates...');
+    let count = 0;
     for (const person of updates) {
-      await service.people.updateContact({
-        resourceName: person.resourceName,
-        updatePersonFields: 'names,emailAddresses,phoneNumbers,biographies',
-        requestBody: person,
-      });
-      process.stdout.write('.');
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          await service.people.updateContact({
+            resourceName: person.resourceName,
+            updatePersonFields: 'names,emailAddresses,phoneNumbers,biographies',
+            requestBody: person,
+          });
+          process.stdout.write('.');
+          count++;
+          if (count % 50 === 0) {
+             console.log(`\nUpdated ${count} contacts. Sleeping to respect rate limit...`);
+             await sleep(3000); // Sleep 3 seconds every 50 contacts
+          }
+          await sleep(500); // 500ms delay per request (~2 per second)
+          break; // Success, break retry loop
+        } catch (err) {
+          if (err.message && (err.message.includes('Quota exceeded') || err.message.includes('502'))) {
+            retries--;
+            console.log(`\nRate limit or 502 hit. Retries left: ${retries}. Sleeping 10s...`);
+            await sleep(10000);
+          } else {
+             throw err; // Re-throw other errors
+          }
+        }
+      }
     }
     console.log('\nUpdates complete.');
 
@@ -211,7 +236,7 @@ function cleanPerson(person) {
   let hasChanges = false;
   const updatedPerson = {
     resourceName: person.resourceName,
-    etag: person.metadata ? person.metadata.etag : undefined,
+    etag: person.etag,
     names: person.names || [],
     emailAddresses: person.emailAddresses || [],
     phoneNumbers: person.phoneNumbers || [],
