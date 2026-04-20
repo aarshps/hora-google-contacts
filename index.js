@@ -102,7 +102,7 @@ async function syncContacts(authClient, dryRun = true) {
         resourceName: 'people/me',
         pageSize: 100,
         pageToken: nextPageToken,
-        personFields: 'names,emailAddresses,phoneNumbers,metadata',
+        personFields: 'names,emailAddresses,phoneNumbers,biographies,metadata',
       });
       if (res.data.connections) {
         allConnections = allConnections.concat(res.data.connections);
@@ -124,11 +124,14 @@ async function syncContacts(authClient, dryRun = true) {
 
     if (dryRun) {
       console.log('--- DRY RUN MODE (No changes made) ---');
-      updates.slice(0, 5).forEach(p => {
-        const name = p.names ? p.names[0].displayName : 'No Name';
-        console.log(`Would update: ${name}`);
+      updates.slice(0, 10).forEach(p => {
+        const name = p.names ? p.names[0] : null;
+        const displayName = name ? `${name.givenName || ''} ${name.familyName || ''}`.trim() : 'No Name';
+        let bio = 'None';
+        if (p.biographies && p.biographies.length > 0) bio = p.biographies[0].value;
+        console.log(`Would update: "${displayName}" | Note: "${bio.replace(/\n/g, ' \\n ')}"`);
       });
-      if (updates.length > 5) console.log(`... and ${updates.length - 5} more.`);
+      if (updates.length > 10) console.log(`... and ${updates.length - 10} more.`);
       return;
     }
 
@@ -141,7 +144,7 @@ async function syncContacts(authClient, dryRun = true) {
     for (const person of updates) {
       await service.people.updateContact({
         resourceName: person.resourceName,
-        updatePersonFields: 'names,emailAddresses,phoneNumbers',
+        updatePersonFields: 'names,emailAddresses,phoneNumbers,biographies',
         requestBody: person,
       });
       process.stdout.write('.');
@@ -164,7 +167,65 @@ function cleanPerson(person) {
     names: person.names || [],
     emailAddresses: person.emailAddresses || [],
     phoneNumbers: person.phoneNumbers || [],
+    biographies: person.biographies || [],
   };
+
+  // 0. Extract Timestamps from Names to Notes
+  if (updatedPerson.names.length > 0) {
+    const name = updatedPerson.names[0];
+    const originalDisplay = name.displayName;
+    const timestampRegex = /[,\s]+(\d{8})\s*$/; // Added \s* to handle trailing spaces
+    const exactTimestampRegex = /^(\d{8})$/;
+    
+    let foundTimestamp = null;
+
+    if (name.honorificSuffix) {
+      const match = name.honorificSuffix.trim().match(exactTimestampRegex);
+      if (match) {
+        foundTimestamp = match[1];
+        name.honorificSuffix = '';
+        hasChanges = true;
+      }
+    }
+    
+    if (!foundTimestamp && name.givenName) {
+      const match = name.givenName.match(timestampRegex);
+      if (match) {
+        foundTimestamp = match[1];
+        name.givenName = name.givenName.replace(timestampRegex, '').trim();
+        hasChanges = true;
+      }
+    }
+    
+    if (!foundTimestamp && name.familyName) {
+      const match = name.familyName.match(timestampRegex);
+      if (match) {
+        foundTimestamp = match[1];
+        name.familyName = name.familyName.replace(timestampRegex, '').trim();
+        hasChanges = true;
+      }
+    }
+
+    if (foundTimestamp) {
+      const noteText = `Timestamp: ${foundTimestamp}`;
+      let bioUpdated = false;
+      
+      if (updatedPerson.biographies.length > 0) {
+        const bio = updatedPerson.biographies[0];
+        if (!bio.value.includes(noteText)) {
+           bio.value = bio.value ? `${bio.value}\n${noteText}` : noteText;
+           bioUpdated = true;
+        }
+      } else {
+        updatedPerson.biographies.push({ value: noteText });
+        bioUpdated = true;
+      }
+      
+      if (bioUpdated) {
+        hasChanges = true;
+      }
+    }
+  }
 
   // 1. Uniform Names (Title Case)
   if (updatedPerson.names.length > 0) {
@@ -237,6 +298,7 @@ async function analyzeContacts(authClient) {
     const stats = {
       total,
       hasNames: 0,
+      namesWithNumbers: [],
       hasPhones: 0,
       hasEmails: 0,
       lowercaseNames: 0,
@@ -255,6 +317,12 @@ async function analyzeContacts(authClient) {
         if (name === name.toLowerCase() && name !== name.toUpperCase()) stats.lowercaseNames++;
         if (name === name.toUpperCase() && name !== name.toLowerCase()) stats.uppercaseNames++;
         
+        // Look for names ending in numbers or date-like patterns
+        if (/\d+/.test(name)) {
+           // just collect names that have digits to see what they look like
+           stats.namesWithNumbers.push(name);
+        }
+
         const count = stats.potentialDuplicates.byName.get(name.toLowerCase()) || 0;
         stats.potentialDuplicates.byName.set(name.toLowerCase(), count + 1);
       }
@@ -279,30 +347,11 @@ async function analyzeContacts(authClient) {
 
     console.log('\n--- CONTACTS ANALYSIS REPORT ---');
     console.log(`Total Contacts: ${total}`);
-    console.log(`With Names:     ${stats.hasNames}`);
-    console.log(`With Phones:    ${stats.hasPhones}`);
-    console.log(`With Emails:    ${stats.hasEmails}`);
-    console.log('\n--- NAME ISSUES ---');
-    console.log(`All Lowercase:  ${stats.lowercaseNames}`);
-    console.log(`All Uppercase:  ${stats.uppercaseNames}`);
-
-    console.log('\n--- PHONE FORMATS (Pattern Count) ---');
-    Object.entries(stats.phoneFormats)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .forEach(([fmt, count]) => console.log(`${fmt.padEnd(20)} : ${count}`));
-
-    const duplicateNames = [...stats.potentialDuplicates.byName.entries()].filter(e => e[1] > 1);
-    const duplicatePhones = [...stats.potentialDuplicates.byPhone.entries()].filter(e => e[1] > 1);
-
-    console.log('\n--- POTENTIAL DUPLICATES ---');
-    console.log(`By Name:  ${duplicateNames.length}`);
-    console.log(`By Phone: ${duplicatePhones.length}`);
     
-    if (duplicateNames.length > 0) {
-      console.log('\nSample Duplicate Names:');
-      duplicateNames.slice(0, 3).forEach(e => console.log(` - ${e[0]} (${e[1]} times)`));
-    }
+    console.log('\n--- NAMES WITH NUMBERS/TIMESTAMPS ---');
+    console.log(`Found ${stats.namesWithNumbers.length} names containing digits.`);
+    console.log('Sample (up to 20):');
+    stats.namesWithNumbers.slice(0, 20).forEach(n => console.log(` - ${n}`));
 
   } catch (err) {
     console.error('The API returned an error: ' + err);
