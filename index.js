@@ -2,7 +2,6 @@ const fs = require('fs').promises;
 const path = require('path');
 const process = require('process');
 const readline = require('readline');
-const { authenticate } = require('@google/local-auth');
 const { google } = require('googleapis');
 
 // If modifying these scopes, delete token.json.
@@ -211,10 +210,119 @@ function titleCase(str) {
   }).join(' ');
 }
 
+/**
+ * Analyzes contacts and prints a summary report of data quality and patterns.
+ */
+async function analyzeContacts(authClient) {
+  const service = google.people({version: 'v1', auth: authClient});
+  let allConnections = [];
+  let nextPageToken = null;
+
+  console.log('Fetching contacts for analysis...');
+  try {
+    do {
+      const res = await service.people.connections.list({
+        resourceName: 'people/me',
+        pageSize: 100,
+        pageToken: nextPageToken,
+        personFields: 'names,emailAddresses,phoneNumbers',
+      });
+      if (res.data.connections) {
+        allConnections = allConnections.concat(res.data.connections);
+      }
+      nextPageToken = res.data.nextPageToken;
+    } while (nextPageToken);
+
+    const total = allConnections.length;
+    const stats = {
+      total,
+      hasNames: 0,
+      hasPhones: 0,
+      hasEmails: 0,
+      lowercaseNames: 0,
+      uppercaseNames: 0,
+      phoneFormats: {},
+      potentialDuplicates: {
+        byName: new Map(),
+        byPhone: new Map()
+      }
+    };
+
+    allConnections.forEach(person => {
+      if (person.names && person.names.length > 0) {
+        stats.hasNames++;
+        const name = person.names[0].displayName;
+        if (name === name.toLowerCase() && name !== name.toUpperCase()) stats.lowercaseNames++;
+        if (name === name.toUpperCase() && name !== name.toLowerCase()) stats.uppercaseNames++;
+        
+        const count = stats.potentialDuplicates.byName.get(name.toLowerCase()) || 0;
+        stats.potentialDuplicates.byName.set(name.toLowerCase(), count + 1);
+      }
+
+      if (person.phoneNumbers && person.phoneNumbers.length > 0) {
+        stats.hasPhones++;
+        person.phoneNumbers.forEach(p => {
+          const val = p.value;
+          const format = val.replace(/\d/g, '#');
+          stats.phoneFormats[format] = (stats.phoneFormats[format] || 0) + 1;
+          
+          const digitOnly = val.replace(/\D/g, '');
+          if (digitOnly) {
+            const count = stats.potentialDuplicates.byPhone.get(digitOnly) || 0;
+            stats.potentialDuplicates.byPhone.set(digitOnly, count + 1);
+          }
+        });
+      }
+
+      if (person.emailAddresses && person.emailAddresses.length > 0) stats.hasEmails++;
+    });
+
+    console.log('\n--- CONTACTS ANALYSIS REPORT ---');
+    console.log(`Total Contacts: ${total}`);
+    console.log(`With Names:     ${stats.hasNames}`);
+    console.log(`With Phones:    ${stats.hasPhones}`);
+    console.log(`With Emails:    ${stats.hasEmails}`);
+    console.log('\n--- NAME ISSUES ---');
+    console.log(`All Lowercase:  ${stats.lowercaseNames}`);
+    console.log(`All Uppercase:  ${stats.uppercaseNames}`);
+
+    console.log('\n--- PHONE FORMATS (Pattern Count) ---');
+    Object.entries(stats.phoneFormats)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .forEach(([fmt, count]) => console.log(`${fmt.padEnd(20)} : ${count}`));
+
+    const duplicateNames = [...stats.potentialDuplicates.byName.entries()].filter(e => e[1] > 1);
+    const duplicatePhones = [...stats.potentialDuplicates.byPhone.entries()].filter(e => e[1] > 1);
+
+    console.log('\n--- POTENTIAL DUPLICATES ---');
+    console.log(`By Name:  ${duplicateNames.length}`);
+    console.log(`By Phone: ${duplicatePhones.length}`);
+    
+    if (duplicateNames.length > 0) {
+      console.log('\nSample Duplicate Names:');
+      duplicateNames.slice(0, 3).forEach(e => console.log(` - ${e[0]} (${e[1]} times)`));
+    }
+
+  } catch (err) {
+    console.error('The API returned an error: ' + err);
+  }
+}
+
 async function main() {
   const auth = await authorize();
-  // Change second argument to false to actually perform updates
-  await syncContacts(auth, true);
+  
+  const mode = process.argv[2] || 'analyze';
+  
+  if (mode === 'analyze') {
+    await analyzeContacts(auth);
+  } else if (mode === 'sync') {
+    await syncContacts(auth, true); // dryRun = true
+  } else if (mode === 'apply') {
+    await syncContacts(auth, false); // dryRun = false
+  } else {
+    console.log('Usage: node index.js [analyze|sync|apply]');
+  }
 }
 
 main().catch(console.error);
