@@ -310,10 +310,13 @@ function cleanPerson(person) {
       
       const currentGiven = name.givenName || '';
       const currentFamily = name.familyName || '';
+      const expectedUnstructured = `${extracted.givenName} ${extracted.familyName}`.trim();
+      const currentUnstructured = name.unstructuredName || '';
 
-      if (currentGiven !== extracted.givenName || currentFamily !== extracted.familyName) {
+      if (currentGiven !== extracted.givenName || currentFamily !== extracted.familyName || currentUnstructured !== expectedUnstructured) {
         name.givenName = extracted.givenName;
         name.familyName = extracted.familyName;
+        name.unstructuredName = ''; // Clear unstructuredName so Google stops using it as display name
         hasChanges = true;
       }
       
