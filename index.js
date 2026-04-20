@@ -308,7 +308,10 @@ function cleanPerson(person) {
     if (currentNameText) {
       const extracted = extractNameAndNotes(currentNameText);
       
-      if (name.givenName !== extracted.givenName || name.familyName !== extracted.familyName) {
+      const currentGiven = name.givenName || '';
+      const currentFamily = name.familyName || '';
+
+      if (currentGiven !== extracted.givenName || currentFamily !== extracted.familyName) {
         name.givenName = extracted.givenName;
         name.familyName = extracted.familyName;
         hasChanges = true;
