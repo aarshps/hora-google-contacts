@@ -10,7 +10,7 @@ The following tags often appear in contact names (especially for service provide
 ## 2. Honorifics
 These are common Malayalam/Indian honorifics that usually imply the preceding words are the core name, and subsequent words are context:
 
-`ikka, chettan, chechi, bro, uncle, aunty, anna, aliya, aliyan, machan, muthe, sir, madam, dr, prof, adv, maman, mami, ammavan, ammayi`
+`ikka, chettan, chetan, chechi, bro, uncle, aunty, anna, aliya, aliyan, machan, muthe, sir, madam, dr, prof, adv, maman, mami, ammavan, ammayi, mon, mole`
 
 ## 3. Name Parsing Logic
 1. Split the raw contact name into words. Normalize each word by converting it to lowercase, removing accents, and stripping non-alphanumeric characters.
