@@ -19,6 +19,7 @@ When the agent generates scripts, it applies the following domain rules:
 This repository contains reusable Gemini CLI skills that guide the agent:
 - `dynamic-scripting`: Instructions on how to generate single-purpose Node.js scripts for contact management and references the domain rules.
 - `google-contacts-updater`: Quirks and solutions for updating Google Contact names (specifically clearing `unstructuredName`).
+- `google-contacts-noop-workaround`: Workaround for forcing Google People API to register a name update to drop `unstructuredName`.
 - `api-rate-limiter`: Patterns for handling Google API quotas and 502 errors during batch updates.
 - `duplicate-merger`: A pattern and strategy for merging Google Contacts without data loss by identifying a primary contact and aggregating data.
 - `session-closer`: A workflow skill for effectively closing out dev sessions and capturing knowledge.
